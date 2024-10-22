@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<extension type="module" version="3.9" client="site" method="upgrade">
+    <name>Bazaar</name>
+    <author>Steven Hansen</author>
+    <version>1.0.0</version>
+    <description>Nummernbasar Strichcodesystem</description>
+    <files>
+        <filename module="mod_bazaar">mod_bazaar.php</filename>
+        <filename>index.html</filename>
+        <folder>bazaar</folder>
+    </files>
+</extension>
