@@ -1,22 +1,61 @@
 <?php
-// No direct access
+session_start();
 defined('_JEXEC') or die;
 
-// Define the path to the bazaar directory within the module
-$bazaarPath = __DIR__ . '/bazaar/';
+// Include the helper file
+require_once __DIR__ . '/helper.php';
 
-// Change the working directory to the bazaar directory
-chdir($bazaarPath);
+// Initialize parameters
+modBazaarHelper::getParams();
 
-// Determine which page to load based on a query parameter
-$page = isset($_GET['page']) ? $_GET['page'] : 'index';
-$allowedPages = ['index', 'admin_login', 'first_time_setup', 'seller_products']; // Add allowed page names here
-$file_path = in_array($page, $allowedPages) ? $page . '.php' : 'index.php';
+if(DEBUG) {
+	modBazaarHelper::debug_log("Get Parameters: success\n");
+}
 
-if (file_exists($file_path)) {
-    // Include the main PHP file
-    include $file_path;
-} else {
-    echo '<p>File not found: ' . htmlspecialchars($bazaarPath . $file_path) . '</p>';
+// Get the Joomla application input
+$input = JFactory::getApplication()->input;
+
+// Get the 'page' parameter from the URL
+$page = $input->get('page', 'default', 'CMD');
+
+// Define allowed pages
+$allowedPages = ['default', 'seller_products', 'verify'];
+
+// Determine the file path based on the 'page' parameter
+$file_path = in_array($page, $allowedPages) ? __DIR__ . '/tmpl/' . $page . '.php' : __DIR__ . '/tmpl/default.php';
+
+if(DEBUG) {
+	modBazaarHelper::debug_log("Call page:" . $page . "\n");
+}
+
+try {
+    $conn = modBazaarHelper::get_db_connection();
+    $first_time_setup = modBazaarHelper::initialize_database($conn);
+
+    if ($first_time_setup) {
+        echo "First time setup required.";
+        return;
+    }
+
+    // Extract the data into the global scope
+    global $bazaarID, $bazaarOver, $maxSellersReached, $canRequestSellerId, $formattedDate, $sellerMessage, $mailtxt_reqnewsellerid, $mailtxt_reqexistingsellerid;
+    extract(modBazaarHelper::getBazaarData($conn));
+
+    if ($_SERVER["REQUEST_METHOD"] == "POST") {
+        modBazaarHelper::handlePostRequest($conn);
+    }
+
+    $conn->close();
+	
+	require JModuleHelper::getLayoutPath('mod_bazaar', $page);
+	
+	} catch (Exception $e) {
+		if (DEBUG) {
+			echo "<pre>Error: " . $e->getMessage() . "</pre>";
+		} else {
+			error_log("An error occurred: " . $e->getMessage());
+			echo "An unexpected error occurred. Please try again later.";
+		}
+		return;
 }
 ?>

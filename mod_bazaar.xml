@@ -1,12 +1,33 @@
 <?xml version="1.0" encoding="utf-8"?>
-<extension type="module" version="3.9" client="site" method="upgrade">
+<extension type="module" version="3.0" client="site" method="upgrade">
     <name>Bazaar</name>
     <author>Steven Hansen</author>
-    <version>1.0.0</version>
+    <creationDate>2023-10-01</creationDate>
+    <version>1.0.6</version>
     <description>Nummernbasar Strichcodesystem</description>
     <files>
         <filename module="mod_bazaar">mod_bazaar.php</filename>
-        <filename>index.html</filename>
-        <folder>bazaar</folder>
+        <filename>helper.php</filename>
+        <folder>tmpl</folder>
     </files>
+	<config>
+		<fields name="params">
+			<fieldset name="basic" label="Basic Settings">
+				<field name="debug" type="radio" default="1" label="Debug Mode" description="Enable or disable debug mode.">
+					<option value="1">Yes</option>
+					<option value="0">No</option>
+				</field>
+				<field name="base_uri" type="text" default="https://www.basar-horrheim.de/bazaar" label="Base URI" description="The base URI for your site." />
+				<field name="db_server" type="text" default="localhost" label="Database Server" description="The database server." />
+				<field name="db_username" type="text" default="bazaaradmin" label="Database Username" description="The database username." />
+				<field name="db_password" type="password" default="b4zaar4dm1n1strator" label="Database Password" description="The database password." />
+				<field name="db_name" type="text" default="bazaar_db" label="Database Name" description="The database name." />
+				<field name="secret" type="text" default="Of3lG8HGdf452nF653oFG93hGF93hf" label="Secret Key" description="The secret key for encryption." />
+				<field name="smtp_from" type="text" default="borga@basar-horrheim.de" label="SMTP From" description="The SMTP from address." />
+				<field name="smtp_from_name" type="text" default="borga@basar-horrheim.de" label="SMTP From Name" description="The SMTP from name." />
+				<!-- Other fields -->
+				<field name="modal_margin" type="text" default="100px" label="Modal-Top-Margin" description="Legen Sie den oberen Rand für Modals fest." />
+			</fieldset>
+		</fields>
+	</config>
 </extension>
