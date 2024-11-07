@@ -25,17 +25,12 @@ $allowedPages = ['default', 'seller_products', 'verify'];
 $file_path = in_array($page, $allowedPages) ? __DIR__ . '/tmpl/' . $page . '.php' : __DIR__ . '/tmpl/default.php';
 
 if(DEBUG) {
-	modBazaarHelper::debug_log("Call page:" . $page . "\n");
+	modBazaarHelper::debug_log("Call page: " . $page . "\n");
+	modBazaarHelper::debug_log("Current Session ID: " . session_id() . "\n");
 }
 
 try {
     $conn = modBazaarHelper::get_db_connection();
-    $first_time_setup = modBazaarHelper::initialize_database($conn);
-
-    if ($first_time_setup) {
-        echo "First time setup required.";
-        return;
-    }
 
     // Extract the data into the global scope
     global $bazaarID, $bazaarOver, $maxSellersReached, $canRequestSellerId, $formattedDate, $sellerMessage, $mailtxt_reqnewsellerid, $mailtxt_reqexistingsellerid;

@@ -26,6 +26,46 @@ class modBazaarHelper
 		define('MODAL_MARGIN', $params->get('modal_margin', '100px'));
     }
 
+	function generate_verification_token() {
+		return bin2hex(random_bytes(16));
+	}
+	
+	// Allow letters, numbers, space, hyphen, parentheses, and period
+	function sanitize_input($input) {
+		$input = preg_replace('/[^a-zA-Z0-9 \-\(\)\.]/', '', $input);
+		$input = trim($input);
+		return $input;
+	}
+
+	// allow only decimals
+	function sanitize_id($input) {
+		$input = preg_replace('/\D/', '', $input);
+		$input = trim($input);
+		return $input;
+	}
+
+	// Function to check for active bazaars
+	function has_active_bazaar($conn) {
+		$current_date = date('Y-m-d');
+		$stmt = $conn->prepare("SELECT COUNT(*) as count FROM bazaar WHERE startDate <= ?");
+		$stmt->bind_param("s", $current_date);
+		$stmt->execute();
+		$result = $stmt->get_result()->fetch_assoc();
+		return $result['count'] > 0;
+	}
+
+	function get_next_checkout_id($conn) {
+		$stmt = $conn->prepare("SELECT MAX(checkout_id) AS max_checkout_id FROM sellers");
+		$stmt->execute();
+		$result = $stmt->get_result();
+		return $result->fetch_assoc()['max_checkout_id'] + 1;
+	}
+
+	// Function to generate a hash
+	function generate_hash($email, $seller_id) {
+		return hash('sha256', $email . $seller_id . SECRET);
+	}
+
     public static function get_db_connection() {
         try {
             $conn = new mysqli(DB_SERVER, DB_USERNAME, DB_PASSWORD, DB_NAME);
@@ -37,89 +77,6 @@ class modBazaarHelper
         } catch (Exception $e) {
             error_log($e->getMessage());
             die("A database error occurred. Please try again later.");
-        }
-    }
-
-    public static function initialize_database($conn) {
-        try {
-            self::debug_log("Creating database.\n");
-            $sql = "CREATE DATABASE IF NOT EXISTS " . DB_NAME;
-            if ($conn->query($sql) !== TRUE) {
-                throw new Exception("Error creating database: " . $conn->error);
-            }
-
-            $conn->select_db(DB_NAME);
-
-            $tables = [
-                "bazaar" => "CREATE TABLE IF NOT EXISTS bazaar (
-                    id INT AUTO_INCREMENT PRIMARY KEY,
-                    startDate DATE NOT NULL,
-                    startReqDate DATE NOT NULL,
-                    max_sellers INT NOT NULL,
-                    brokerage DOUBLE,
-                    min_price DOUBLE,
-                    price_stepping DOUBLE,
-                    mailtxt_reqnewsellerid TEXT,
-                    mailtxt_reqexistingsellerid TEXT
-                )",
-                "sellers" => "CREATE TABLE IF NOT EXISTS sellers (
-                    id INT AUTO_INCREMENT PRIMARY KEY,
-                    hash VARCHAR(255) NOT NULL,
-                    bazaar_id INT(11) DEFAULT 0,
-                    email VARCHAR(255) NOT NULL,
-                    reserved BOOLEAN DEFAULT FALSE,
-                    verified BOOLEAN DEFAULT FALSE,
-                    checkout BOOLEAN DEFAULT FALSE,
-                    checkout_id INT(6) DEFAULT 0,
-                    verification_token VARCHAR(255),
-                    family_name VARCHAR(255) NOT NULL,
-                    given_name VARCHAR(255) NOT NULL,
-                    phone VARCHAR(255) NOT NULL,
-                    street VARCHAR(255) NOT NULL,
-                    house_number VARCHAR(255) NOT NULL,
-                    zip VARCHAR(255) NOT NULL,
-                    city VARCHAR(255) NOT NULL,
-                    consent BOOLEAN
-                )",
-                "products" => "CREATE TABLE IF NOT EXISTS products (
-                    id INT AUTO_INCREMENT PRIMARY KEY,
-                    bazaar_id INT(10) DEFAULT 0,
-                    name VARCHAR(255) NOT NULL,
-                    size VARCHAR(255) NOT NULL,
-                    price DOUBLE NOT NULL,
-                    barcode VARCHAR(255) NOT NULL,
-                    seller_id INT,
-                    sold BOOLEAN DEFAULT FALSE,
-                    FOREIGN KEY (seller_id) REFERENCES sellers(id)
-                )",
-                "users" => "CREATE TABLE IF NOT EXISTS users (
-                    id INT AUTO_INCREMENT PRIMARY KEY,
-                    username VARCHAR(255) NOT NULL UNIQUE,
-                    password_hash VARCHAR(255) NOT NULL,
-                    role ENUM('admin', 'cashier') NOT NULL
-                )",
-                "settings" => "CREATE TABLE IF NOT EXISTS settings (
-                    id INT AUTO_INCREMENT PRIMARY KEY,
-                    operationMode VARCHAR(50) NOT NULL DEFAULT 'online',
-                    wifi_ssid VARCHAR(255) DEFAULT '',
-                    wifi_password VARCHAR(255) DEFAULT ''
-                )"
-            ];
-
-            foreach ($tables as $name => $sql) {
-                self::debug_log("Check table: $name.\n");
-                if ($conn->query($sql) !== TRUE) {
-                    throw new Exception("Error creating $name table: " . $conn->error);
-                }
-            }
-
-            $sql = "SELECT COUNT(*) as count FROM users";
-            $result = $conn->query($sql);
-            $row = $result->fetch_assoc();
-            return $row['count'] == 0;
-        } catch (Exception $e) {
-            error_log($e->getMessage());
-            die("An error occurred during database initialization.");
         }
     }
 
@@ -168,10 +125,10 @@ class modBazaarHelper
     public static function handlePostRequest($conn) {
         global $mailtxt_reqnewsellerid, $mailtxt_reqexistingsellerid;
 
-    try {
+		try {
 			// Retrieve the seller_id and hash from the URL
-			$seller_id = isset($_GET['seller_id']) ? intval($_GET['seller_id']) : null;
-			$hash = isset($_GET['hash']) ? $_GET['hash'] : null;
+			$seller_id = isset($_GET['seller_id']) ? self::sanitize_id($_GET['seller_id']) : null;
+			$hash = isset($_GET['hash']) ? self::sanitize_input($_GET['hash']) : null;
 
 			// Debug log for all POST parameters
 			$postParams = '';
@@ -182,22 +139,26 @@ class modBazaarHelper
 			self::debug_log("GET parameter seller_id: $seller_id");
 			self::debug_log("GET parameter hash: $hash");
 			
-            if ($_SERVER["REQUEST_METHOD"] == "POST" && isset($_POST['request_seller_id'])) {
-                $email = $_POST['email'];
-                $family_name = $_POST['family_name'];
-                $given_name = !empty($_POST['given_name']) ? $_POST['given_name'] : 'Nicht angegeben';
-                $phone = $_POST['phone'];
-                $street = !empty($_POST['street']) ? $_POST['street'] : 'Nicht angegeben';
-                $house_number = !empty($_POST['house_number']) ? $_POST['house_number'] : 'Nicht angegeben';
-                $zip = !empty($_POST['zip']) ? $_POST['zip'] : 'Nicht angegeben';
-                $city = !empty($_POST['city']) ? $_POST['city'] : 'Nicht angegeben';
-                $reserve = isset($_POST['reserve']) ? 1 : 0;
-                $use_existing_number = $_POST['use_existing_number'] === 'yes';
-                $consent = isset($_POST['consent']) && $_POST['consent'] === 'yes' ? 1 : 0;
+			if ($_SERVER["REQUEST_METHOD"] == "POST" && isset($_POST['request_seller_id'])) {
+				$email = $_POST['email']; // Email is typically validated rather than sanitized
+				$family_name = self::sanitize_input($_POST['family_name']);
+				$given_name = !empty($_POST['given_name']) ? self::sanitize_input($_POST['given_name']) : 'Nicht angegeben';
+				$phone = self::sanitize_input($_POST['phone']);
+				$street = !empty($_POST['street']) ? self::sanitize_input($_POST['street']) : 'Nicht angegeben';
+				$house_number = !empty($_POST['house_number']) ? self::sanitize_input($_POST['house_number']) : 'Nicht angegeben';
+				$zip = !empty($_POST['zip']) ? self::sanitize_input($_POST['zip']) : 'Nicht angegeben';
+				$city = !empty($_POST['city']) ? self::sanitize_input($_POST['city']) : 'Nicht angegeben';
+				$reserve = isset($_POST['reserve']) ? 1 : 0;
+				$use_existing_number = $_POST['use_existing_number'] === 'yes';
+				$consent = isset($_POST['consent']) && $_POST['consent'] === 'yes' ? 1 : 0;
 				
-                $sql = "SELECT verification_token, verified FROM sellers WHERE email='$email'";
-                $result = $conn->query($sql);
-                $existing_seller = $result->fetch_assoc();
+				// SQL query to check existing seller
+				$sql = "SELECT verification_token, verified FROM sellers WHERE email=?";
+				$stmt = $conn->prepare($sql);
+				$stmt->bind_param("s", $email);
+				$stmt->execute();
+				$result = $stmt->get_result();
+				$existing_seller = $result->fetch_assoc();
 
                 self::debug_log("Existing seller: " . ($existing_seller ? 'true' : 'false') . ".\n");
 
@@ -224,102 +185,6 @@ class modBazaarHelper
                     }
                 }
             }
-			
-			// Handle product creation form submission
-			if ($_SERVER["REQUEST_METHOD"] == "POST" && isset($_POST['create_product'])) {
-				$bazaar_id = self::get_current_bazaar_id($conn);
-				$name = $conn->real_escape_string($_POST['name']);
-				$size = $conn->real_escape_string($_POST['size']);
-				$price = $conn->real_escape_string($_POST['price']);
-
-				$rules = get_bazaar_pricing_rules($conn, $bazaar_id);
-				$min_price = $rules['min_price'];
-				$price_stepping = $rules['price_stepping'];
-
-				self::debug_log("Create Product parameters:\n" . 
-				"bazaar_id = " . $bazaar_id . "\nname = " . $name . "\nsize = " . $size . "\nprice = " . $price . 
-				"\nrules = " . $rules . "\nmin_price = " . $min_price . "\nprice_stepping = " . $price_stepping);
-
-				// Validate price
-				if ($price < $min_price) {
-					$_SESSION['messageBox'] = [
-						'text' => "Der eingegebene Preis ist niedriger als der Mindestpreis von $min_price €.",
-						'type' => 'warning'  // Types can be 'success', 'info', 'warning', 'danger', etc.
-					];
-				} elseif (fmod($price, $price_stepping) != 0) {
-					$_SESSION['messageBox'] = [
-						'text' => "Der Preis muss in Schritten von $price_stepping € eingegeben werden.",
-						'type' => 'warning'  // Types can be 'success', 'info', 'warning', 'danger', etc.
-					];
-				} else {
-					// Generate a unique EAN-13 barcode
-					do {
-						$barcode = str_pad(rand(0, 999999), 6, '0', STR_PAD_LEFT) . str_pad(rand(0, 999999), 6, '0', STR_PAD_LEFT); // Ensure 12-digit barcode as string
-						$checkDigit = calculateCheckDigit($barcode);
-						$barcode .= $checkDigit; // Append the check digit to make it a valid EAN-13 barcode
-						self::debug_log("barcode created (data): " . $barcode);
-						$sql = "SELECT id FROM products WHERE barcode='$barcode'";
-						$result = $conn->query($sql);
-					} while ($result->num_rows > 0);
-
-					// Insert product into the database
-					$sql = "INSERT INTO products (name, size, price, barcode, bazaar_id, seller_id) VALUES ('$name', '$size', '$price', '$barcode', '$bazaar_id', '$seller_id')";
-					if ($conn->query($sql) === TRUE) {
-						echo "<div class='alert alert-success'>Artikel erfolgreich erstellt.</div>";
-					} else {
-						echo "<div class='alert alert-danger'>Fehler beim Erstellen des Artikels: " . $conn->error . "</div>";
-					}
-				}
-			}
-
-			// Handle product update form submission
-			if ($_SERVER["REQUEST_METHOD"] == "POST" && isset($_POST['update_product'])) {
-				$bazaar_id = self::get_current_bazaar_id($conn);
-				$product_id = $conn->real_escape_string($_POST['product_id']);
-				$name = $conn->real_escape_string($_POST['name']);
-				$size = $conn->real_escape_string($_POST['size']);
-				$price = $conn->real_escape_string($_POST['price']);
-
-				$rules = get_bazaar_pricing_rules($conn, $bazaar_id);
-				$min_price = $rules['min_price'];
-				$price_stepping = $rules['price_stepping'];
-
-				// Validate price
-				if ($price < $min_price) {
-					$update_validation_message = "Der eingegebene Preis ist niedriger als der Mindestpreis von $min_price €.";
-				} elseif (fmod($price, $price_stepping) != 0) {
-					$update_validation_message = "Der Preis muss in Schritten von $price_stepping € eingegeben werden.";
-				} else {
-					$sql = "UPDATE products SET name='$name', price='$price', size='$size', bazaar_id='$bazaar_id' WHERE id='$product_id' AND seller_id='$seller_id'";
-					if ($conn->query($sql) === TRUE) {
-						echo "<div class='alert alert-success'>Artikel erfolgreich aktualisiert.</div>";
-					} else {
-						echo "<div class='alert alert-danger'>Fehler beim Aktualisieren des Artikels: " . $conn->error . "</div>";
-					}
-				}
-			}
-
-			// Handle product deletion
-			if ($_SERVER["REQUEST_METHOD"] == "POST" && isset($_POST['delete_product'])) {
-				$product_id = $conn->real_escape_string($_POST['product_id']);
-
-				$sql = "DELETE FROM products WHERE id='$product_id' AND seller_id='$seller_id'";
-				if ($conn->query($sql) === TRUE) {
-					echo "<div class='alert alert-success'>Artikel erfolgreich gelöscht.</div>";
-				} else {
-					echo "<div class='alert alert-danger'>Fehler beim Löschen des Artikels: " . $conn->error . "</div>";
-				}
-			}
-
-			// Handle delete all products
-			if ($_SERVER["REQUEST_METHOD"] == "POST" && isset($_POST['delete_all_products'])) {
-				$sql = "DELETE FROM products WHERE seller_id='$seller_id'";
-				if ($conn->query($sql) === TRUE) {
-					echo "<div class='alert alert-success'>Alle Artikel erfolgreich gelöscht.</div>";
-				} else {
-					echo "<div class='alert alert-danger'>Fehler beim Löschen aller Artikel: " . $conn->error . "</div>";
-				}
-			}
         } catch (Exception $e) {
             error_log($e->getMessage());
         }
@@ -329,17 +194,20 @@ class modBazaarHelper
         try {
 			self::debug_log("process existing number.\n");
 			
-            $seller_id = $_POST['seller_id'];
-            $sql = "SELECT id FROM sellers WHERE id='$seller_id' AND email='$email'";
-            $result = $conn->query($sql);
+			$seller_id = $_POST['seller_id'];
+			$stmt = $conn->prepare("SELECT id FROM sellers WHERE id = ? AND email = ?");
+			$stmt->bind_param("is", $seller_id, $email);
+			$stmt->execute();
+			$result = $stmt->get_result();
 
             if ($result->num_rows > 0) {
-                $next_checkout_id = self::get_next_checkout_id($conn);
-                $hash = hash('sha256', $email . $seller_id . SECRET);
-                $verification_token = bin2hex(random_bytes(16));
+				$hash = self::generate_hash($email, $seller_id);
+				$bazaarId = self::get_current_bazaar_id($conn);
+				$verification_token = self::generate_verification_token();
 
-                $sql = "UPDATE sellers SET verification_token='$verification_token', verified=0, consent='$consent', checkout_id='$next_checkout_id' WHERE id='$seller_id'";
-                self::execute_sql_and_send_email($conn, $sql, $email, $seller_id, $hash, $verification_token, $mailtxt_reqexistingsellerid);
+				$stmt = $conn->prepare("UPDATE sellers SET verification_token = ?, verified = 0, consent = ?, bazaar_id = ? WHERE id = ?");
+				$stmt->bind_param("siii", $verification_token, $consent, $bazaarId, $seller_id);
+				self::execute_sql_and_send_email($stmt, $email, $seller_id, $hash, $verification_token, $mailtxt_reqexistingsellerid);
             } else {
                 self::showSellerMessage("Ungültige Verkäufer-ID oder E-Mail.");
             }
@@ -348,47 +216,61 @@ class modBazaarHelper
         }
     }
 
-    public static function process_new_seller($conn, $email, $family_name, $given_name, $phone, $street, $house_number, $zip, $city, $reserve, $consent, $mailtxt_reqnewsellerid) {
+    public static function process_new_seller($conn,  $email, $family_name, $given_name, $phone, $street, $house_number, $zip, $city, $reserve, $consent, $mailtxt_reqnewsellerid) {
         try {
 			self::debug_log("process new seller.\n");
 			
-            $seller_id = self::generate_unique_seller_id($conn);
-            $next_checkout_id = self::get_next_checkout_id($conn);
-            $hash = hash('sha256', $email . $seller_id . SECRET);
-            $verification_token = bin2hex(random_bytes(16));
-            $bazaar_id = 0;
-				
-            $sql = "INSERT INTO sellers (id, email, reserved, verification_token, family_name, given_name, phone, street, house_number, zip, city, hash, bazaar_id, consent, checkout_id) VALUES ('$seller_id', '$email', '$reserve', '$verification_token', '$family_name', '$given_name', '$phone', '$street', '$house_number', '$zip', '$city', '$hash', '$bazaar_id', '$consent', '$next_checkout_id')";
-            self::execute_sql_and_send_email($conn, $sql, $email, $seller_id, $hash, $verification_token, $mailtxt_reqnewsellerid);
+			$seller_id = self::generate_unique_seller_id($conn);
+			$hash = self::generate_hash($email, $seller_id);
+			$bazaarId = self::get_current_bazaar_id($conn);
+			$verification_token = self::generate_verification_token();
+
+			$stmt = $conn->prepare("INSERT INTO sellers (id, email, reserved, verification_token, family_name, given_name, phone, street, house_number, zip, city, hash, bazaar_id, consent) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
+			$stmt->bind_param("isisssssssssis", $seller_id, $email, $reserve, $verification_token, $family_name, $given_name, $phone, $street, $house_number, $zip, $city, $hash, $bazaarId, $consent);
+			self::execute_sql_and_send_email($stmt, $email, $seller_id, $hash, $verification_token, $mailtxt_reqnewsellerid);
         } catch (Exception $e) {
             error_log($e->getMessage());
         }
     }
 
-    public static function execute_sql_and_send_email($conn, $sql, $email, $seller_id, $hash, $verification_token, $mailtxt) {
+    public static function execute_sql_and_send_email($stmt, $email, $seller_id, $hash, $verification_token, $mailtxt) {
         global $seller_message, $BASE_URI, $given_name, $family_name;
 
         try {
 			self::debug_log("execute sql and send mail.\n");
+			$session = JFactory::getSession();
 			
-            if ($conn->query($sql) === TRUE) {
-                $verification_link = BASE_URI . "?page=verify&token=$verification_token&hash=$hash";
+			$verification_link = BASE_URI . "/verify.php?token=$verification_token&hash=$hash";
+			$create_products_link = BASE_URI . "/seller_products.php?seller_id=$seller_id&hash=$hash";
+			$revert_link = BASE_URI . "/verify.php?action=revert&seller_id=$seller_id&hash=$hash";
+			$delete_link = BASE_URI . "/flush.php?seller_id=$seller_id&hash=$hash";
+	
+            if ($stmt->execute()) {
 				self::debug_log("verification link is: " . $verification_link ."\n");
                 $subject = "Verifizierung Ihrer Verkäufer-ID: $seller_id";
-                $message = str_replace(
-                    ['{BASE_URI}', '{given_name}', '{family_name}', '{verification_link}', '{seller_id}', '{hash}'],
-                    [$BASE_URI, $given_name, $family_name, $verification_link, $seller_id, $hash],
-                    $mailtxt
-                );
+				$message = str_replace(
+					['{BASE_URI}', '{given_name}', '{family_name}', '{verification_link}', '{create_products_link}', '{revert_link}', '{delete_link}', '{seller_id}', '{hash}'],
+					[BASE_URI, $given_name, $family_name, $verification_link, $create_products_link, $revert_link, $delete_link, $seller_id, $hash],
+					$mailtxt
+				);
                 $send_result = self::send_email($email, $subject, $message);
 
                 if ($send_result === true) {
-					$_SESSION['seller_message'] = "Eine E-Mail mit einem Bestätigungslink wurde an " . htmlspecialchars($_POST['email']) . " gesendet.";
+					$session->set('messageBoxBazaar', [
+						'text' => "Eine E-Mail mit einem Bestätigungslink wurde an " . htmlspecialchars($_POST['email']) . " gesendet.",
+						'type' => 'success'
+					]);
                 } else {
-					$_SESSION['seller_message'] = "Fehler beim Senden der Bestätigungs-E-Mail: " . send_result . " gesendet.";
+					$session->set('messageBoxBazaar', [
+						'text' => "Fehler beim Senden der Bestätigungs-E-Mail: " . send_result . "<br>" . $stmt->error,
+						'type' => 'warning'
+					]);
                 }
             } else {
-				$_SESSION['seller_message'] = "Fehler: " . $sql . "<br>" . $conn->error;
+				$_SESSION['messageBox'] = [
+					'text' => "Fehler: " . $stmt->error,
+					'type' => 'warning'
+				];
             }
         } catch (Exception $e) {
             error_log($e->getMessage());
@@ -409,19 +291,6 @@ class modBazaarHelper
             } else {
                 return null;
             }
-        } catch (Exception $e) {
-            error_log($e->getMessage());
-            return null;
-        }
-    }
-
-    public static function get_next_checkout_id($conn) {
-        try {
-			self::debug_log("function get next checkout id.\n");
-			
-            $sql = "SELECT MAX(checkout_id) AS max_checkout_id FROM sellers";
-            $result = $conn->query($sql);
-            return $result->fetch_assoc()['max_checkout_id'] + 1;
         } catch (Exception $e) {
             error_log($e->getMessage());
             return null;
@@ -479,26 +348,4 @@ class modBazaarHelper
 		];
 	}
 }
-
-	// Function to calculate the check digit for EAN-13
-	function calculateCheckDigit($barcode) {
-		$sum = 0;
-		for ($i = 0; $i < 12; $i++) {
-			$digit = (int)$barcode[$i];
-			$sum += ($i % 2 === 0) ? $digit : $digit * 3;
-		}
-		$mod = $sum % 10;
-		return ($mod === 0) ? 0 : 10 - $mod;
-	}
-
-	// Function to get bazaar pricing rules
-	function get_bazaar_pricing_rules($conn, $bazaar_id) {
-		$sql = "SELECT min_price, price_stepping FROM bazaar WHERE id='$bazaar_id'";
-		$result = $conn->query($sql);
-		if ($result->num_rows > 0) {
-			return $result->fetch_assoc();
-		} else {
-			return null;
-		}
-	}
 ?>

@@ -1,14 +1,4 @@
 <?php defined('_JEXEC') or die; 
-
-session_start();
-if (isset($_SESSION['messageBox'])) {
-    $messageData = $_SESSION['messageBox'];
-    $messageText = htmlspecialchars($messageData['text']);
-    $messageType = $messageData['type']; // Use this to set the alert class
-
-    // Clear the message after displaying it
-    unset($_SESSION['messageBox']);
-}
 ?>
 
 <div class="container">
@@ -23,13 +13,22 @@ if (isset($_SESSION['messageBox'])) {
         <div class="alert alert-info">Anfragen für neue Verkäufer-IDs sind derzeit noch nicht freigeschalten. Die nächste Nummernvergabe startet am: <?php echo htmlspecialchars($formattedDate); ?></div>
     <?php else: ?>
         <h2 class="mt-5">Verkäufer-ID anfordern</h2>
-        <?php if ($messageData): ?>
-			<?php echo "<div class='alert alert-$messageType'>$messageText</div>"; ?>
-		<?php endif; ?>
+        <?php
+        $session = JFactory::getSession();
+        $messageData = $session->get('messageBoxBazaar', null);
+        if ($messageData): 
+            $messageText = htmlspecialchars($messageData['text']);
+            $messageType = $messageData['type'];
+        ?>
+            <div class="alert alert-<?php echo $messageType; ?>">
+                <?php echo $messageText; ?>
+            </div>
+            <?php $session->clear('messageBoxBazaar'); // Clear the message after displaying it ?>
+        <?php endif; ?>
         <form action="?page=default" method="post">
             <div class="row form-row">
                 <div class="form-group col-md-6">
-                    <label for="family_name" class="required">Nachname:</label>
+                    <label for="family_name" class="required">Nachname: <span class="text-danger">*</span></label>
                     <input type="text" class="form-control" id="family_name" name="family_name" required>
                 </div>
                 <div class="form-group col-md-6">
@@ -58,11 +57,11 @@ if (isset($_SESSION['messageBox'])) {
                 </div>
             </div>
             <div class="form-group">
-                <label for="phone" class="required">Telefonnummer:</label>
+                <label for="phone" class="required">Telefonnummer: <span class="text-danger">*</span></label>
                 <input type="text" class="form-control" id="phone" name="phone" required>
             </div>
             <div class="form-group">
-                <label for="email" class="required">E-Mail:</label>
+                <label for="email" class="required">E-Mail: <span class="text-danger">*</span></label>
                 <input type="email" class="form-control" id="email" name="email" required>
             </div>
             <div class="form-group">
@@ -85,7 +84,7 @@ if (isset($_SESSION['messageBox'])) {
                 <input type="text" class="form-control" id="seller_id" name="seller_id">
             </div>
             <div class="form-group">
-                <label for="consent" class="required">Einwilligung zur Datenspeicherung:</label>
+                <label for="consent" class="required">Einwilligung zur Datenspeicherung: <span class="text-danger">*</span></label>
                 <div class="form-check">
                     <input class="form-check-input" type="radio" name="consent" id="consent_yes" value="yes" required>
                     <label class="form-check-label" for="consent_yes">
